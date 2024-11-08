@@ -98,7 +98,12 @@ df['sequence_num'] = df.groupby('Unique Stay').cumcount() + 1
 # df = pd.get_dummies(df, columns=['race', 'insurance', 'marital_status', 'gender', 'amountuom', 'label', 'value'])
 
 # Drop Time of Death Column and Identifier Columns
-df.drop(columns=['dod', 'subject_id', 'hadm_id', 'Unique Stay'], inplace=True)
+df.drop(columns=['dod', 'subject_id', 'hadm_id'], inplace=True)
 
 # Save
-df.to_csv('model_data.csv', index=False)
+# df.to_csv('model_data.csv', index=False)
+#%%
+for i, chunk in enumerate(range(0, df.shape[0], 100000)):
+    # Creating file names dynamically based on chunk number
+    chunk_df = df.iloc[chunk:chunk + 100000]
+    chunk_df.to_csv(f'final_data\model_data_chunk_{i+1}.csv', index=False)
