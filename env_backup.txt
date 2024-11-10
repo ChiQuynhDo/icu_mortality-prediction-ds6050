@@ -1,0 +1,4 @@
+# conda environments:
+#
+base                  *  /home/melmoheb/miniconda3
+
