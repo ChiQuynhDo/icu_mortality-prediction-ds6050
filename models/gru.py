@@ -1,63 +1,72 @@
 #%%
-import pandas as pd
-from os import listdir
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import GRU, Dense, Masking, InputLayer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.optimizers import Adam
+from os import listdir
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import GRU, Dense, Masking, InputLayer
 from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import RandomizedSearchCV
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from sklearn.base import BaseEstimator
+import tensorflow as tf
 
 # Local Path
-data_path = r'..\data\final_data'
+data_path = r'..\data'
 
 # Files to Read
-data_files = listdir(data_path)
+data_files = [i for i in listdir(data_path) if 'model' in i]
 
 # Read and concat data
-data = pd.concat([pd.read_csv(data_path + '\\' + file) for file in data_files]).drop(columns=['endtime'])
+data = pd.concat([pd.read_csv(data_path + '\\' + file) for file in data_files])
 
-# Handle categorical variables with Label Encoding
-label_encoder = LabelEncoder()
+# for column in data.columns:
+#     data[column + '_was_missing'] = data[column].isnull().astype(int)
 
-# Encode categorical features
-categorical_columns = ['insurance', 'race', 'marital_status', 'gender', 'value', 'amountuom', 'amount']
-for col in categorical_columns:
-    data[col] = label_encoder.fit_transform(data[col].astype(str))
+# data = data.fillna(0)
+data = data.fillna(method='bfill').fillna(method='ffill')
 
-# Encode target variable `Died` (binary classification: 0 = Alive, 1 = Died)
-data['Died'] = label_encoder.fit_transform(data['Died'])
+# Sort and group data by 'Unique Stay' and 'sequence_num' to ensure time order
+data = data.sort_values(by=['Unique Stay', 'sequence_num'])
 
-# Sort by Unique Stay and sequence number to get events in correct order
-data.sort_values(by=['Unique Stay', 'sequence_num'], inplace=True)
-
-# Create sequences of features for each Unique Stay
-sequence_data = []
-sequence_labels = []
-
+# Create sequences for each 'Unique Stay'
 unique_stays = data['Unique Stay'].unique()
+sequences = []
+labels = []
 
-# Iterate over unique stays
 for stay in unique_stays:
     stay_data = data[data['Unique Stay'] == stay]
-    stay_features = stay_data[['insurance', 'race', 'marital_status', 'gender', 'anchor_age', 'value', 'amount', 'amountuom']].values
-    stay_label = stay_data['Died'].values[-1]  # Use the last event to define the label
     
-    # Add the sequence and its corresponding label
-    sequence_data.append(stay_features)
-    sequence_labels.append(stay_label)
+    # Drop non-feature columns and extract features as a numpy array
+    features_columns = ['anchor_age', 'Arterial Blood Pressure mean', 'Arterial O2 pressure', 
+                          'Creatinine (serum)', 'Dobutamine', 'Dopamine', 'Epinephrine', 
+                          'Heart Rate', 'Inspired O2 Fraction', 'Lactic Acid', 
+                          'Norepinephrine', 'Platelet Count', 'Total Bilirubin']
 
-# Pad sequences to ensure uniform input length
-sequence_data = pad_sequences(sequence_data, padding='post', dtype='float32', maxlen=50)  # Adjust maxlen as needed
+    # features_columns.extend([i + '_was_missing' for i in features_columns])
+
+    features = stay_data[features_columns].values
+    
+    # Target label: use the mortality status from the last row of each stay
+    label = stay_data['mortality'].values[-1]  # Assuming 'mortality' is the target
+    
+    # Add the sequence and corresponding label
+    sequences.append(features)
+    labels.append(label)
+
+# Pad sequences to have uniform length
+max_seq_length = 50  # You can adjust this based on your data distribution
+sequences_padded = pad_sequences(sequences, maxlen=max_seq_length, dtype='float32', padding='post', truncating='post')
 
 # Convert labels to numpy array
-sequence_labels = np.array(sequence_labels)
+labels = np.array(labels)
 
 # Train-test split
-X_train, X_test, y_train, y_test = train_test_split(sequence_data, sequence_labels, test_size=0.2, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(sequences_padded, labels, test_size=0.2, random_state=42)
 
 # Define custom wrapper for the Keras model to use with RandomizedSearchCV
 class KerasModelWrapper(BaseEstimator):
@@ -76,7 +85,10 @@ class KerasModelWrapper(BaseEstimator):
             GRU(self.gru_units, return_sequences=False, dropout=self.dropout_rate),
             Dense(1, activation='sigmoid')
         ])
-        model.compile(optimizer=Adam(learning_rate=self.learning_rate), loss='binary_crossentropy', metrics=['accuracy'])
+        model.compile(optimizer=Adam(learning_rate=self.learning_rate), loss='binary_crossentropy', metrics=['accuracy',
+                                                                                                            tf.keras.metrics.Precision(name='precision'), 
+                                                                                                            tf.keras.metrics.Recall(name='recall'),
+                                                                                                            tf.keras.metrics.AUC(name='auc')])
         return model
 
     def fit(self, X, y):
@@ -99,7 +111,7 @@ param_grid = {
     'gru_units': [32, 64, 128],
     'dropout_rate': [0.2, 0.3, 0.5],
     'batch_size': [16, 32, 64],
-    'epochs': [10, 20, 50]
+    'epochs': [10, 20]
 }
 
 # RandomizedSearchCV to tune hyperparameters
@@ -122,7 +134,7 @@ best_model = random_search_result.best_estimator_
 
 # Save the best model to a file
 model_save_path = 'gru_best_model.keras'
-best_model.model.save(model_save_path)
+# best_model.model.save(model_save_path)
 
 print(f"Best model saved at: {model_save_path}")
 
@@ -132,6 +144,5 @@ print(f'Test Accuracy: {test_acc:.4f}')
 
 # Load the saved model and re-evaluate on the test set
 loaded_model = load_model(model_save_path)
-loaded_test_loss, loaded_test_acc = loaded_model.evaluate(X_test, y_test, verbose=0)
+model_metrics = loaded_model.evaluate(X_test, y_test, verbose=0)
 
-print(f"Loaded Model Test Accuracy: {loaded_test_acc:.4f}")
