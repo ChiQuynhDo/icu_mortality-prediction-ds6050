@@ -1,4 +1,4 @@
-# Predicting-Mortality-Risk-of-ICU-Patients-Post-Coronary-Artery-Bypass-Graft-Surgery
+# Predicting Mortality Risk of ICU Patients Post Coronary Artery Bypass Graft Surgery
 
 ### Abstract 
 
